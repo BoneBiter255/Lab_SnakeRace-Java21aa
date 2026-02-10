@@ -2,6 +2,7 @@ package co.eci.snake.concurrency;
 
 import co.eci.snake.core.Board;
 import co.eci.snake.core.Direction;
+import co.eci.snake.core.GameController;
 import co.eci.snake.core.Snake;
 
 import java.util.concurrent.ThreadLocalRandom;
@@ -9,19 +10,22 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class SnakeRunner implements Runnable {
   private final Snake snake;
   private final Board board;
+  private final GameController controller;
   private final int baseSleepMs = 80;
   private final int turboSleepMs = 40;
   private int turboTicks = 0;
 
-  public SnakeRunner(Snake snake, Board board) {
+  public SnakeRunner(Snake snake, Board board, GameController controller) {
     this.snake = snake;
     this.board = board;
+    this.controller = controller;
   }
 
   @Override
   public void run() {
     try {
       while (!Thread.currentThread().isInterrupted()) {
+        controller.checkAndWaitIfPaused();
         maybeTurn();
         var res = board.step(snake);
         if (res == Board.MoveResult.HIT_OBSTACLE) {

@@ -36,39 +36,52 @@ public final class Board {
   public synchronized Set<Position> turbo() { return new HashSet<>(turbo); }
   public synchronized Map<Position, Position> teleports() { return new HashMap<>(teleports); }
 
-  public synchronized MoveResult step(Snake snake) {
+  public MoveResult step(Snake snake) {
     Objects.requireNonNull(snake, "snake");
     var head = snake.head();
     var dir = snake.direction();
     Position next = new Position(head.x() + dir.dx, head.y() + dir.dy).wrap(width, height);
 
-    if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE;
-
-    boolean teleported = false;
-    if (teleports.containsKey(next)) {
-      next = teleports.get(next);
-      teleported = true;
+    synchronized (this) {
+      if (obstacles.contains(next)) return MoveResult.HIT_OBSTACLE;
+      if (teleports.containsKey(next)) {
+        next = teleports.get(next);
+      }
     }
 
-    boolean ateMouse = mice.remove(next);
-    boolean ateTurbo = turbo.remove(next);
+    synchronized (this) {
+      boolean ateMouse = mice.remove(next);
+      boolean ateTurbo = turbo.remove(next);
 
-    snake.advance(next, ateMouse);
+      snake.advance(next, ateMouse);
 
-    if (ateMouse) {
-      mice.add(randomEmpty());
-      obstacles.add(randomEmpty());
-      if (ThreadLocalRandom.current().nextDouble() < 0.2) turbo.add(randomEmpty());
+      if (ateMouse) {
+        mice.add(randomEmptySafe());
+        obstacles.add(randomEmptySafe());
+        if (ThreadLocalRandom.current().nextDouble() < 0.2) turbo.add(randomEmptySafe());
+      }
+
+      if (ateTurbo) return MoveResult.ATE_TURBO;
+      if (ateMouse) return MoveResult.ATE_MOUSE;
+      if (teleports.containsKey(next)) return MoveResult.TELEPORTED;
+      return MoveResult.MOVED;
     }
+  }
 
-    if (ateTurbo) return MoveResult.ATE_TURBO;
-    if (ateMouse) return MoveResult.ATE_MOUSE;
-    if (teleported) return MoveResult.TELEPORTED;
-    return MoveResult.MOVED;
+  private Position randomEmptySafe() {
+    var rnd = ThreadLocalRandom.current();
+    Position p;
+    int guard = 0;
+    do {
+      p = new Position(rnd.nextInt(width), rnd.nextInt(height));
+      guard++;
+      if (guard > width*height*2) break;
+    } while (mice.contains(p) || obstacles.contains(p) || turbo.contains(p) || teleports.containsKey(p));
+    return p;
   }
 
   private void createTeleportPairs(int pairs) {
-    for (int i=0;i<pairs;i++) {
+    for (int i = 0; i < pairs; i++) {
       Position a = randomEmpty();
       Position b = randomEmpty();
       teleports.put(a, b);

@@ -3,6 +3,7 @@ package co.eci.snake.ui.legacy;
 import co.eci.snake.concurrency.SnakeRunner;
 import co.eci.snake.core.Board;
 import co.eci.snake.core.Direction;
+import co.eci.snake.core.GameController;
 import co.eci.snake.core.Position;
 import co.eci.snake.core.Snake;
 import co.eci.snake.core.engine.GameClock;
@@ -13,14 +14,44 @@ import java.awt.event.ActionEvent;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 
 public final class SnakeApp extends JFrame {
 
   private final Board board;
   private final GamePanel gamePanel;
-  private final JButton actionButton;
+  private final JButton startButton;
+  private final JButton pauseButton;
   private final GameClock clock;
+  private final GameController controller;
   private final java.util.List<Snake> snakes = new java.util.ArrayList<>();
+  private final StatsPanel statsPanel;
+  private final JDialog statsDialog;
+  private ExecutorService executor;
+  private boolean gameStarted = false;
+
+  private static final Color[] PALETTE = {
+      new Color(0, 170, 0),
+      new Color(0, 160, 180),
+      new Color(255, 100, 0),
+      new Color(200, 50, 100),
+      new Color(100, 100, 255),
+      new Color(50, 200, 100),
+      new Color(255, 200, 50),
+      new Color(150, 75, 150),
+      new Color(75, 150, 200),
+      new Color(200, 150, 50),
+      new Color(100, 200, 200),
+      new Color(200, 100, 150),
+      new Color(150, 200, 75),
+      new Color(100, 100, 150),
+      new Color(200, 200, 100),
+      new Color(150, 100, 200),
+      new Color(100, 150, 100),
+      new Color(200, 100, 100),
+      new Color(100, 200, 150),
+      new Color(150, 150, 200)
+  };
 
   public SnakeApp() {
     super("The Snake Race");
@@ -34,12 +65,25 @@ public final class SnakeApp extends JFrame {
       snakes.add(Snake.of(x, y, dir));
     }
 
+    this.controller = new GameController(snakes);
     this.gamePanel = new GamePanel(board, () -> snakes);
-    this.actionButton = new JButton("Action");
+    this.startButton = new JButton("Start");
+    this.pauseButton = new JButton("Pause");
+    pauseButton.setEnabled(false);
+
+    this.statsPanel = new StatsPanel();
+    this.statsDialog = new JDialog(this, "Game Statistics", false);
+    statsDialog.add(statsPanel);
+    statsDialog.setSize(450, 350);
+    statsDialog.setLocationRelativeTo(this);
+
+    JPanel buttonPanel = new JPanel();
+    buttonPanel.add(startButton);
+    buttonPanel.add(pauseButton);
 
     setLayout(new BorderLayout());
     add(gamePanel, BorderLayout.CENTER);
-    add(actionButton, BorderLayout.SOUTH);
+    add(buttonPanel, BorderLayout.SOUTH);
 
     setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
     pack();
@@ -47,26 +91,67 @@ public final class SnakeApp extends JFrame {
 
     this.clock = new GameClock(60, () -> SwingUtilities.invokeLater(gamePanel::repaint));
 
-    var exec = Executors.newVirtualThreadPerTaskExecutor();
-    snakes.forEach(s -> exec.submit(new SnakeRunner(s, board)));
+    startButton.addActionListener(e -> startGame());
+    pauseButton.addActionListener(e -> togglePause());
 
-    actionButton.addActionListener((ActionEvent e) -> togglePause());
+    setupKeyBindings();
 
-    gamePanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(KeyStroke.getKeyStroke("SPACE"), "pause");
-    gamePanel.getActionMap().put("pause", new AbstractAction() {
-      @Override
-      public void actionPerformed(ActionEvent e) {
-        togglePause();
-      }
-    });
+    setVisible(true);
+  }
 
+  private void startGame() {
+    if (!gameStarted) {
+      gameStarted = true;
+      startButton.setEnabled(false);
+      pauseButton.setEnabled(true);
+
+      executor = Executors.newVirtualThreadPerTaskExecutor();
+      snakes.forEach(s -> executor.submit(new SnakeRunner(s, board, controller)));
+
+      controller.start();
+      clock.start();
+    }
+  }
+
+  private void togglePause() {
+    if ("Pause".equals(pauseButton.getText())) {
+      pauseButton.setText("Resume");
+      controller.pause();
+      clock.pause();
+      showStats();
+    } else {
+      pauseButton.setText("Pause");
+      controller.resume();
+      clock.resume();
+      statsDialog.setVisible(false);
+    }
+  }
+
+  private void showStats() {
+    var stats = snakes.stream()
+        .map(s -> new co.eci.snake.core.SnakeStats(
+            snakes.indexOf(s),
+            s.snapshot().size(),
+            0,
+            true,
+            controller.getElapsedTime()
+        ))
+        .toList();
+    statsPanel.updateStats(stats);
+    statsDialog.setVisible(true);
+  }
+
+  private void setupKeyBindings() {
     var player = snakes.get(0);
     InputMap im = gamePanel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
     ActionMap am = gamePanel.getActionMap();
+
     im.put(KeyStroke.getKeyStroke("LEFT"), "left");
     im.put(KeyStroke.getKeyStroke("RIGHT"), "right");
     im.put(KeyStroke.getKeyStroke("UP"), "up");
     im.put(KeyStroke.getKeyStroke("DOWN"), "down");
+    im.put(KeyStroke.getKeyStroke("SPACE"), "pause");
+
     am.put("left", new AbstractAction() {
       @Override
       public void actionPerformed(ActionEvent e) {
@@ -91,6 +176,14 @@ public final class SnakeApp extends JFrame {
         player.turn(Direction.DOWN);
       }
     });
+    am.put("pause", new AbstractAction() {
+      @Override
+      public void actionPerformed(ActionEvent e) {
+        if (gameStarted && pauseButton.isEnabled()) {
+          togglePause();
+        }
+      }
+    });
 
     if (snakes.size() > 1) {
       var p2 = snakes.get(1);
@@ -98,6 +191,7 @@ public final class SnakeApp extends JFrame {
       im.put(KeyStroke.getKeyStroke('D'), "p2-right");
       im.put(KeyStroke.getKeyStroke('W'), "p2-up");
       im.put(KeyStroke.getKeyStroke('S'), "p2-down");
+
       am.put("p2-left", new AbstractAction() {
         @Override
         public void actionPerformed(ActionEvent e) {
@@ -123,20 +217,8 @@ public final class SnakeApp extends JFrame {
         }
       });
     }
-
-    setVisible(true);
-    clock.start();
   }
 
-  private void togglePause() {
-    if ("Action".equals(actionButton.getText())) {
-      actionButton.setText("Resume");
-      clock.pause();
-    } else {
-      actionButton.setText("Action");
-      clock.resume();
-    }
-  }
 
   public static final class GamePanel extends JPanel {
     private final Board board;
@@ -167,7 +249,6 @@ public final class SnakeApp extends JFrame {
       for (int y = 0; y <= board.height(); y++)
         g2.drawLine(0, y * cell, board.width() * cell, y * cell);
 
-      // Obstáculos
       g2.setColor(new Color(255, 102, 0));
       for (var p : board.obstacles()) {
         int x = p.x() * cell, y = p.y() * cell;
@@ -179,7 +260,6 @@ public final class SnakeApp extends JFrame {
         g2.setColor(new Color(255, 102, 0));
       }
 
-      // Ratones
       g2.setColor(Color.BLACK);
       for (var p : board.mice()) {
         int x = p.x() * cell, y = p.y() * cell;
@@ -189,7 +269,6 @@ public final class SnakeApp extends JFrame {
         g2.setColor(Color.BLACK);
       }
 
-      // Teleports (flechas rojas)
       Map<Position, Position> tp = board.teleports();
       g2.setColor(Color.RED);
       for (var entry : tp.entrySet()) {
@@ -200,7 +279,6 @@ public final class SnakeApp extends JFrame {
         g2.fillPolygon(xs, ys, xs.length);
       }
 
-      // Turbo (rayos)
       g2.setColor(Color.BLACK);
       for (var p : board.turbo()) {
         int x = p.x() * cell, y = p.y() * cell;
@@ -209,24 +287,44 @@ public final class SnakeApp extends JFrame {
         g2.fillPolygon(xs, ys, xs.length);
       }
 
-      // Serpientes
       var snakes = snakesSupplier.get();
       int idx = 0;
       for (Snake s : snakes) {
         var body = s.snapshot().toArray(new Position[0]);
+        Color snakeColor = idx < PALETTE.length ? PALETTE[idx] : generateColor(idx);
+
         for (int i = 0; i < body.length; i++) {
           var p = body[i];
-          Color base = (idx == 0) ? new Color(0, 170, 0) : new Color(0, 160, 180);
           int shade = Math.max(0, 40 - i * 4);
           g2.setColor(new Color(
-              Math.min(255, base.getRed() + shade),
-              Math.min(255, base.getGreen() + shade),
-              Math.min(255, base.getBlue() + shade)));
+              Math.min(255, snakeColor.getRed() + shade),
+              Math.min(255, snakeColor.getGreen() + shade),
+              Math.min(255, snakeColor.getBlue() + shade)));
           g2.fillRect(p.x() * cell + 2, p.y() * cell + 2, cell - 4, cell - 4);
+        }
+
+        if (body.length > 0) {
+          var head = body[0];
+          int x = head.x() * cell + cell / 2;
+          int y = head.y() * cell + cell / 2;
+          g2.setColor(Color.WHITE);
+          g2.setFont(new Font("Arial", Font.BOLD, 12));
+          String num = String.valueOf(idx);
+          FontMetrics fm = g2.getFontMetrics();
+          int tx = x - fm.stringWidth(num) / 2;
+          int ty = y + fm.getAscent() / 2;
+          g2.drawString(num, tx, ty);
         }
         idx++;
       }
       g2.dispose();
+    }
+
+    private Color generateColor(int index) {
+      float hue = (index % 20) / 20.0f;
+      float saturation = 0.7f;
+      float brightness = 0.9f;
+      return Color.getHSBColor(hue, saturation, brightness);
     }
   }
 
